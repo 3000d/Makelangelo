@@ -112,6 +112,7 @@ public class Makelangelo
 	private static final int IMAGE_SPIRAL=1;
 	private static final int IMAGE_4LEVEL=2;
 	private static final int IMAGE_SCANLINE=3;
+	private static final int IMAGE_RGB=4;
 	
 	private Preferences prefs = Preferences.userRoot().node("DrawBot");
 	private String[] recentFiles;
@@ -129,7 +130,7 @@ public class Makelangelo
 	// GUI elements
 	private static JFrame mainframe;
 	private JMenuBar menuBar;
-    private JMenuItem buttonOpenFile, buttonSaveFile, buttonExit;
+    private JMenuItem buttonOpenFile, buttonText2GCODE, buttonSaveFile, buttonExit;
     private JMenuItem buttonConfigurePreferences, buttonAdjustMachineSize, buttonAdjustPulleySize, buttonChangeTool, buttonAdjustTool, buttonRescan, buttonDisconnect, buttonJogMotors;
     private JMenuItem buttonStart, buttonStartAt, buttonPause, buttonHalt;
     private JMenuItem buttonZoomIn,buttonZoomOut,buttonZoomToFit;
@@ -264,33 +265,30 @@ public class Makelangelo
 	
 	public void LoadImage(String filename) {
         // where to save temp output file?
-		String workingDirectory=System.getProperty("user.dir");
-		String destinationFile = workingDirectory+"temp.ngc";//filename.substring(0, filename.lastIndexOf('.')) + ".ngc";
+		String destinationFile = System.getProperty("user.dir")+"/temp.ngc";
 		
 		// read in image
 		BufferedImage img;
 		try {
 			img = ImageIO.read(new File(filename));
-		}
-		catch(IOException e) {
-			return;
-		}
-	
-		// resize & flip as needed
-		Filter_Resize rs = new Filter_Resize(); 
-		img = rs.Process(img);
-		
-		// convert with style
-		try {
+			
+			// resize & flip as needed
+			Filter_Resize rs = new Filter_Resize(); 
+			img = rs.Process(img);
+			
+			// convert with style
 			switch(GetDrawStyle()) {
-			case Makelangelo.IMAGE_TSP:		LoadImageTSP(img,destinationFile);		break;
-			case Makelangelo.IMAGE_SPIRAL:	LoadImageSpiral(img,destinationFile);	break;
-			case Makelangelo.IMAGE_4LEVEL:	LoadImage4Level(img,destinationFile);	break;
+			case Makelangelo.IMAGE_TSP:			LoadImageTSP(img,destinationFile);		break;
+			case Makelangelo.IMAGE_SPIRAL:		LoadImageSpiral(img,destinationFile);	break;
+			case Makelangelo.IMAGE_4LEVEL:		LoadImage4Level(img,destinationFile);	break;
 			case Makelangelo.IMAGE_SCANLINE:	LoadImageScanLine(img,destinationFile);	break;
+			case Makelangelo.IMAGE_RGB:         LoadImageRGB(img,destinationFile);		break;
 			}
 		}
 		catch(IOException e) {
-			Makelangelo.getSingleton().Log("<font color='red'>Conversion error: "+e.getMessage()+"</font>");
+	    	Log("<span style='color:red'>File could not be opened: "+e.getLocalizedMessage()+"</span>\n");
+	    	RemoveRecentFile(filename);
+	    	return;
 		}
 	}
 
@@ -316,6 +314,12 @@ public class Makelangelo
 	}
 	
 	
+	private void LoadImageRGB(BufferedImage img,String destinationFile) throws IOException {
+		Filter_RGBCircleGenerator generator = new Filter_RGBCircleGenerator(destinationFile);
+		generator.Process(img);
+	}
+	
+	
 	private void LoadImageSpiral(BufferedImage img,String destinationFile) throws IOException {
 		Filter_BlackAndWhite bw = new Filter_BlackAndWhite(255); 
 		img = bw.Process(img);
@@ -334,6 +338,15 @@ public class Makelangelo
 
 		Filter_ScanlineGenerator generator = new Filter_ScanlineGenerator(destinationFile);
 		generator.Process(img);
+	}
+	
+	
+	private void TextToGCODE() {
+		Filter_YourMessageHere msg = new Filter_YourMessageHere();
+
+		msg.Generate( System.getProperty("user.dir")+"/temp.ngc");
+
+    	previewPane.ZoomToFitPaper();
 	}
 	
 
@@ -537,13 +550,17 @@ public class Makelangelo
 			   		"Estimated "+statusBar.formatTime((long)(gcode.estimated_time))+"s to draw.</font>\n");
 	    }
 	    catch(IOException e) {
-	    	Log("<span style='color:red'>File "+filename+" could not be opened.</span>\n");
+	    	Log("<span style='color:red'>File could not be opened: "+e.getLocalizedMessage()+"</span>\n");
 	    	RemoveRecentFile(filename);
 	    	return;
 	    }
 	    
 	    previewPane.setGCode(gcode.lines);
 	    Halt();
+	}
+	
+	public boolean IsFileLoaded() {
+		return ( gcode.fileOpened && gcode.lines != null && gcode.lines.size() > 0 );
 	}
 	
 	/**
@@ -595,6 +612,7 @@ public class Makelangelo
 				prefs.put("recent-files-"+i, recentFiles[i]);
 			}
 		}
+		prefs.remove("recent-files-"+(i-1));
 		
 		UpdateMenuBar();
 	}
@@ -617,14 +635,15 @@ public class Makelangelo
 	// User has asked that a file be opened.
 	public void OpenFileOnDemand(String filename) {
 		Log("<font color='green'>Opening file "+filename+"...</font>\n");
-		
-		if(IsFileGcode(filename)) {
+
+	   	UpdateRecentFiles(filename);
+	   	
+	   	if(IsFileGcode(filename)) {
 			LoadGCode(filename);
     	} else {
     		LoadImage(filename);
     	}
 
-	   	UpdateRecentFiles(filename);
     	previewPane.ZoomToFitPaper();
 
     	statusBar.Clear();
@@ -729,7 +748,7 @@ public class Makelangelo
 		final JCheckBox reverse_h = new JCheckBox("Flip for glass");
 		reverse_h.setSelected(MachineConfiguration.getSingleton().reverseForGlass);
 
-		String [] styles= { "Single Line Zigzag", "Spiral", "Cross hatching", "Scanlines" };
+		String [] styles= { "Single Line Zigzag", "Spiral", "Cross hatching", "Scanlines", "RGB" };
 
 		final JComboBox input_draw_style = new JComboBox(styles);
 		input_draw_style.setSelectedIndex(GetDrawStyle());
@@ -805,6 +824,7 @@ public class Makelangelo
 		SendLineToRobot("TELEPORT X0 Y0 Z0");
 	}
 	
+	
 	// Take the next line from the file and send it to the robot, if permitted. 
 	public void SendFileCommand() {
 		if(running==false || paused==true || gcode.fileOpened==false || portConfirmed==false || gcode.linesProcessed>=gcode.linesTotal) return;
@@ -827,16 +847,20 @@ public class Makelangelo
 		}
 	}
 	
-	private void ChangeToTool(String toolName) {
-		int i=Integer.parseInt(toolName.replace(";",""));
-		String names[] = { "pen (tool 0)", "LED (tool 1)", "spray can (tool 2)" };
-		if(i>names.length) {
+	
+	private void ChangeToTool(String changeToolString) {
+		int i=Integer.parseInt(changeToolString.replace(";",""));
+		
+		MachineConfiguration mc = MachineConfiguration.getSingleton();
+		String [] toolNames = mc.getToolNames();
+		
+		if(i>toolNames.length) {
 			Log("<span style='color:red'>Invalid tool "+i+" requested.</span>");
 			i=0;
 		}
-		toolName = names[i];
-		JOptionPane.showMessageDialog(null,"Please prepare "+toolName+", then click any button to begin.");
+		JOptionPane.showMessageDialog(null,"Please prepare "+toolNames[i]+", then click any button to begin.");
 	}
+	
 	
 	/**
 	 * removes comments, processes commands drawbot shouldn't have to handle.
@@ -996,6 +1020,10 @@ public class Makelangelo
 		}
 		if( subject == buttonOpenFile ) {
 			OpenFileDialog();
+			return;
+		}
+		if( subject == buttonText2GCODE ) {
+			TextToGCODE();
 			return;
 		}
 
@@ -1361,10 +1389,16 @@ public class Makelangelo
 	        	if( inputLine.compareTo(version) !=0 ) {
 	        		JOptionPane.showMessageDialog(null,"A new version of this software is available.  The latest version is "+inputLine+"\n"
 	        											+"Please visit http://makelangelo.com/ to get the new hotness.");
+	        	} else {
+	        		JOptionPane.showMessageDialog(null,"This version is up to date.");
 	        	}
+	        } else {
+	        	throw new Exception();
 	        }
 	        in.close();
-		} catch (Exception e) {}
+		} catch (Exception e) {
+			JOptionPane.showMessageDialog(null,"Sorry, I failed.  Please visit http://www.marginallyclever.com/ to check yourself.");
+		}
 	}
 
 	// Rebuild the contents of the menu based on current program state
@@ -1478,34 +1512,39 @@ public class Makelangelo
         
 
         // File conversion menu
-        menu = new JMenu("File");
+        menu = new JMenu("GCODE");
         menu.setMnemonic(KeyEvent.VK_H);
         menu.getAccessibleContext().setAccessibleDescription("Get help");
 
-        subMenu = new JMenu("Open...");
-        subMenu.getAccessibleContext().setAccessibleDescription("Open a g-code file...");
+        buttonText2GCODE = new JMenuItem("Text to GCODE");
+        buttonText2GCODE.setEnabled(!running);
+        buttonText2GCODE.addActionListener(this);
+        menu.add(buttonText2GCODE);
+        
+        subMenu = new JMenu("Open/Convert File...");
+        subMenu.getAccessibleContext().setAccessibleDescription("Open a g-code file");
         subMenu.setEnabled(!running);
         group = new ButtonGroup();
 
-        // list recent files
-        if(recentFiles != null && recentFiles.length>0) {
-        	// list files here
-        	for(i=0;i<recentFiles.length;++i) {
-        		if(recentFiles[i] == null || recentFiles[i].length()==0) break;
-            	buttonRecent[i] = new JMenuItem((1+i) + " "+recentFiles[i],KeyEvent.VK_1+i);
-            	if(buttonRecent[i]!=null) {
-            		buttonRecent[i].addActionListener(this);
-            		subMenu.add(buttonRecent[i]);
-            	}
-        	}
-        	if(i!=0) subMenu.addSeparator();
-        }
+	        // list recent files
+	        if(recentFiles != null && recentFiles.length>0) {
+	        	// list files here
+	        	for(i=0;i<recentFiles.length;++i) {
+	        		if(recentFiles[i] == null || recentFiles[i].length()==0) break;
+	            	buttonRecent[i] = new JMenuItem((1+i) + " "+recentFiles[i],KeyEvent.VK_1+i);
+	            	if(buttonRecent[i]!=null) {
+	            		buttonRecent[i].addActionListener(this);
+	            		subMenu.add(buttonRecent[i]);
+	            	}
+	        	}
+	        	if(i!=0) subMenu.addSeparator();
+	        }
         
-        buttonOpenFile = new JMenuItem("Open File...",KeyEvent.VK_O);
-        buttonOpenFile.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, ActionEvent.ALT_MASK));
-        buttonOpenFile.getAccessibleContext().setAccessibleDescription("Open a g-code file...");
-        buttonOpenFile.addActionListener(this);
-        subMenu.add(buttonOpenFile);
+	        buttonOpenFile = new JMenuItem("Open File...",KeyEvent.VK_O);
+	        buttonOpenFile.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, ActionEvent.ALT_MASK));
+	        buttonOpenFile.getAccessibleContext().setAccessibleDescription("Open a g-code file...");
+	        buttonOpenFile.addActionListener(this);
+	        subMenu.add(buttonOpenFile);
         
         menu.add(subMenu);
 
@@ -1656,10 +1695,11 @@ public class Makelangelo
         // TODO remember preferences for window size
         mainframe.setSize(1200,700);
         mainframe.setVisible(true);
-
-        // demo.reconnectToLastPort();
-        // demo.reopenLastFile();
-        demo.CheckForUpdate();
+        
+        demo.previewPane.ZoomToFitPaper();
+        //demo.reconnectToLastPort();
+        //demo.reopenLastFile();
+        //demo.CheckForUpdate();
     }
     
     public static void main(String[] args) {
